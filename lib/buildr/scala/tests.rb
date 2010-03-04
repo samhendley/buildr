@@ -97,16 +97,17 @@ module Buildr::Scala
       success = []
 
       reporter_options = 'TFGBSAR' # testSucceeded, testFailed, testIgnored, suiteAborted, runStopped, runAborted, runCompleted
-      scalatest.each do |suite|
-        info "ScalaTest #{suite.inspect}"
+        info "ScalaTest #{scalatest.join(', ')}"
         # Use Ant to execute the ScalaTest task, gives us performance and reporting.
-        reportFile = File.join(task.report_to.to_s, "TEST-#{suite}.txt")
+        reportFile = File.join(task.report_to.to_s, "TEST-scalatest.txt")
         taskdef = Buildr.artifacts(self.class.dependencies).each(&:invoke).map(&:to_s)
         Buildr.ant('scalatest') do |ant|
           ant.taskdef :name=>'scalatest', :classname=>'org.scalatest.tools.ScalaTestTask',
             :classpath=>taskdef.join(File::PATH_SEPARATOR)
           ant.scalatest :runpath=>dependencies.join(File::PATH_SEPARATOR) do
-            ant.suite    :classname=>suite
+            scalatest.each do |s|
+              ant.suite   :classname=>s
+            end
             ant.reporter :type=>'stdout', :config=>reporter_options
             ant.reporter :type=>'file', :filename=> reportFile, :config=>reporter_options
             # TODO: This should be name=>value pairs!
@@ -120,25 +121,26 @@ module Buildr::Scala
         # This is a bit of a pain right now because ScalaTest doesn't flush its
         # output synchronously before the Ant test finishes so we have to loop 
         # and wait for an indication that the test run was completed. 
-        failed = false
+        failed = []
         completed = false
         wait = 0
         while (!completed) do
           File.open(reportFile, "r") do |input|
             while (line = input.gets) do
-              failed = (line =~ /(TESTS? FAILED)|(RUN STOPPED)|(RUN ABORTED)/) unless failed
-              completed |= (line =~ /Run completed/)
-              break if (failed)
+              if line =~ /(TEST FAILED -)/
+                m = line.match(/TEST FAILED - ([^\.]*)\..*/)
+                failed << m[1]
+              end
+              completed |= (line =~ /Run completed\./)
+              break if completed
             end
           end
           wait += 1
-          break if (failed || wait > 10) 
           unless completed
             sleep(1)
           end
         end
-        success << suite if (completed && !failed)
-      end
+        success += scalatest.reject{|s| failed.include?(s.split('.')[-1])}
       
       success
     end # run
